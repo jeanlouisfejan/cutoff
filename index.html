@@ -1,0 +1,1093 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Découpe de pions — Wargame</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      background: #1e1e2e;
+      color: #cdd6f4;
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      overflow: hidden;
+      user-select: none;
+    }
+
+    /* ===== Barre de menus ===== */
+    .menubar {
+      display: flex;
+      background: #313244;
+      border-bottom: 1px solid #45475a;
+      position: relative;
+      z-index: 100;
+    }
+
+    .menu-item {
+      position: relative;
+      padding: 6px 14px;
+      font-size: 0.85rem;
+      cursor: pointer;
+      color: #cdd6f4;
+    }
+
+    .menu-item:hover { background: #45475a; }
+
+    .menu-item.open > .menu-dropdown { display: block; }
+
+    .menu-dropdown {
+      display: none;
+      position: absolute;
+      top: 100%;
+      left: 0;
+      background: #313244;
+      border: 1px solid #45475a;
+      min-width: 220px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+      z-index: 200;
+    }
+
+    .menu-dropdown .menu-entry {
+      padding: 6px 20px;
+      font-size: 0.85rem;
+      cursor: pointer;
+      color: #cdd6f4;
+      white-space: nowrap;
+    }
+
+    .menu-dropdown .menu-entry:hover { background: #585b70; }
+
+    .menu-dropdown .menu-separator {
+      height: 1px;
+      background: #45475a;
+      margin: 4px 0;
+    }
+
+    .menu-entry .shortcut {
+      float: right;
+      color: #6c7086;
+      margin-left: 30px;
+    }
+
+    .menu-entry.disabled {
+      color: #6c7086;
+      pointer-events: none;
+    }
+
+    /* ===== Toolbar ===== */
+    .toolbar {
+      display: flex;
+      gap: 12px;
+      align-items: center;
+      padding: 6px 12px;
+      background: #2a2a3c;
+      border-bottom: 1px solid #45475a;
+      flex-wrap: wrap;
+    }
+
+    .toolbar label {
+      font-size: 0.8rem;
+      color: #a6adc8;
+    }
+
+    .toolbar button {
+      background: #45475a;
+      color: #cdd6f4;
+      border: 1px solid #585b70;
+      border-radius: 3px;
+      padding: 3px 10px;
+      font-size: 0.8rem;
+      cursor: pointer;
+    }
+
+    .toolbar button:hover { background: #585b70; }
+    .toolbar button.active { background: #89b4fa; color: #1e1e2e; }
+
+    .toolbar-group {
+      display: flex;
+      gap: 5px;
+      align-items: center;
+    }
+
+    .toolbar-sep {
+      width: 1px;
+      height: 20px;
+      background: #45475a;
+    }
+
+    #zoom-label {
+      font-size: 0.75rem;
+      color: #a6adc8;
+      min-width: 50px;
+      text-align: center;
+    }
+
+    /* ===== Zone de travail ===== */
+    .workspace {
+      flex: 1;
+      overflow: auto;
+      background: #11111b;
+      position: relative;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .workspace.empty::after {
+      content: 'Charger une planche de pions via Fichier > Charger planche...';
+      color: #6c7086;
+      font-size: 1rem;
+      position: absolute;
+      text-align: center;
+      padding: 40px;
+    }
+
+    #canvas-container {
+      position: relative;
+      display: none;
+    }
+
+    #canvas-container.loaded {
+      display: block;
+    }
+
+    canvas {
+      display: block;
+      cursor: crosshair;
+    }
+
+    /* Sélection en cours */
+    .selection-overlay {
+      position: absolute;
+      border: 2px dashed #f9e2af;
+      background: rgba(249, 226, 175, 0.15);
+      pointer-events: none;
+      z-index: 10;
+      display: none;
+    }
+
+    .selection-overlay.active {
+      display: block;
+    }
+
+    /* ===== Modale de saisie ===== */
+    .modal-overlay {
+      display: none;
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(0,0,0,0.6);
+      z-index: 500;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .modal-overlay.visible {
+      display: flex;
+    }
+
+    .modal {
+      background: #313244;
+      border: 1px solid #45475a;
+      border-radius: 8px;
+      padding: 24px;
+      min-width: 380px;
+      box-shadow: 0 12px 40px rgba(0,0,0,0.5);
+    }
+
+    .modal h3 {
+      font-size: 1rem;
+      margin-bottom: 16px;
+      color: #cdd6f4;
+    }
+
+    .modal .preview-box {
+      width: 100%;
+      max-height: 150px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: #1e1e2e;
+      border: 1px solid #45475a;
+      border-radius: 4px;
+      margin-bottom: 16px;
+      overflow: hidden;
+    }
+
+    .modal .preview-box img {
+      max-width: 100%;
+      max-height: 148px;
+      object-fit: contain;
+    }
+
+    .modal .field {
+      margin-bottom: 12px;
+    }
+
+    .modal .field label {
+      display: block;
+      font-size: 0.8rem;
+      color: #a6adc8;
+      margin-bottom: 4px;
+    }
+
+    .modal .field input {
+      width: 100%;
+      padding: 6px 10px;
+      font-size: 0.85rem;
+      background: #1e1e2e;
+      color: #cdd6f4;
+      border: 1px solid #585b70;
+      border-radius: 4px;
+      outline: none;
+    }
+
+    .modal .field input:focus {
+      border-color: #89b4fa;
+    }
+
+    .modal .buttons {
+      display: flex;
+      gap: 8px;
+      justify-content: flex-end;
+      margin-top: 16px;
+    }
+
+    .modal .buttons button {
+      padding: 6px 16px;
+      font-size: 0.85rem;
+      border-radius: 4px;
+      cursor: pointer;
+      border: 1px solid #585b70;
+    }
+
+    .modal .btn-ok {
+      background: #89b4fa;
+      color: #1e1e2e;
+      border-color: #89b4fa;
+      font-weight: 500;
+    }
+
+    .modal .btn-ok:hover { background: #74a8f7; }
+
+    .modal .btn-cancel {
+      background: #45475a;
+      color: #cdd6f4;
+    }
+
+    .modal .btn-cancel:hover { background: #585b70; }
+
+    /* ===== Liste des pions (panneau latéral) ===== */
+    .sidebar {
+      width: 280px;
+      background: #2a2a3c;
+      border-left: 1px solid #45475a;
+      display: flex;
+      flex-direction: column;
+      flex-shrink: 0;
+    }
+
+    .sidebar-header {
+      padding: 8px 12px;
+      background: #313244;
+      border-bottom: 1px solid #45475a;
+      font-size: 0.85rem;
+      font-weight: 500;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .sidebar-header .count {
+      font-size: 0.75rem;
+      color: #6c7086;
+    }
+
+    .pion-list {
+      flex: 1;
+      overflow-y: auto;
+      padding: 6px;
+    }
+
+    .pion-list-empty {
+      color: #6c7086;
+      font-size: 0.8rem;
+      text-align: center;
+      padding: 20px;
+    }
+
+    .pion-entry {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 8px;
+      border-radius: 4px;
+      margin-bottom: 4px;
+      background: #1e1e2e;
+      border: 1px solid #45475a;
+      cursor: pointer;
+      transition: border-color 0.15s;
+    }
+
+    .pion-entry:hover {
+      border-color: #89b4fa;
+    }
+
+    .pion-entry img {
+      width: 40px;
+      height: 40px;
+      object-fit: contain;
+      border-radius: 2px;
+      background: #313244;
+    }
+
+    .pion-entry .pion-info {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .pion-entry .pion-name {
+      font-size: 0.8rem;
+      color: #cdd6f4;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .pion-entry .pion-file {
+      font-size: 0.7rem;
+      color: #6c7086;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .pion-entry .pion-delete {
+      background: none;
+      border: none;
+      color: #6c7086;
+      cursor: pointer;
+      font-size: 0.9rem;
+      padding: 2px 4px;
+    }
+
+    .pion-entry .pion-delete:hover { color: #f38ba8; }
+
+    /* ===== Zone principale (workspace + sidebar) ===== */
+    .main-area {
+      flex: 1;
+      display: flex;
+      overflow: hidden;
+    }
+
+    /* ===== Barre d'état ===== */
+    .statusbar {
+      display: flex;
+      justify-content: space-between;
+      padding: 3px 12px;
+      background: #313244;
+      border-top: 1px solid #45475a;
+      font-size: 0.75rem;
+      color: #6c7086;
+    }
+
+    /* ===== File inputs cachés ===== */
+    .hidden { display: none; }
+  </style>
+</head>
+<body>
+
+<!-- ===== Barre de menus ===== -->
+<nav class="menubar" id="menubar">
+  <div class="menu-item" data-menu="fichier">
+    Fichier
+    <div class="menu-dropdown">
+      <div class="menu-entry" data-action="load">Charger planche...<span class="shortcut">Ctrl+O</span></div>
+      <div class="menu-separator"></div>
+      <div class="menu-entry" data-action="export-json">Exporter JSON<span class="shortcut">Ctrl+S</span></div>
+      <div class="menu-entry" data-action="export-images">Exporter images (JPG)</div>
+      <div class="menu-separator"></div>
+      <div class="menu-entry" data-action="quit">Quitter</div>
+    </div>
+  </div>
+  <div class="menu-item" data-menu="edition">
+    Edition
+    <div class="menu-dropdown">
+      <div class="menu-entry" data-action="undo">Annuler dernier pion<span class="shortcut">Ctrl+Z</span></div>
+      <div class="menu-entry" data-action="clear-all">Effacer tous les pions</div>
+    </div>
+  </div>
+  <div class="menu-item" data-menu="affichage">
+    Affichage
+    <div class="menu-dropdown">
+      <div class="menu-entry" data-action="zoom-in">Zoom +<span class="shortcut">Ctrl++</span></div>
+      <div class="menu-entry" data-action="zoom-out">Zoom -<span class="shortcut">Ctrl+-</span></div>
+      <div class="menu-entry" data-action="zoom-fit">Ajuster à la fenêtre<span class="shortcut">Ctrl+0</span></div>
+      <div class="menu-separator"></div>
+      <div class="menu-entry" data-action="toggle-grid">Afficher grille de découpe</div>
+    </div>
+  </div>
+  <div class="menu-item" data-menu="aide">
+    Aide
+    <div class="menu-dropdown">
+      <div class="menu-entry" data-action="about">A propos</div>
+    </div>
+  </div>
+</nav>
+
+<!-- ===== Toolbar ===== -->
+<div class="toolbar">
+  <div class="toolbar-group">
+    <button id="btn-load" title="Charger une planche">Charger planche</button>
+  </div>
+  <div class="toolbar-sep"></div>
+  <div class="toolbar-group">
+    <button id="btn-zoom-out" title="Zoom -">-</button>
+    <span id="zoom-label">100%</span>
+    <button id="btn-zoom-in" title="Zoom +">+</button>
+    <button id="btn-zoom-fit" title="Ajuster">Ajuster</button>
+  </div>
+  <div class="toolbar-sep"></div>
+  <div class="toolbar-group">
+    <button id="btn-export-json" title="Exporter en JSON">Exporter JSON</button>
+    <button id="btn-export-img" title="Exporter les images JPG">Exporter JPG</button>
+  </div>
+</div>
+
+<!-- Inputs fichiers cachés -->
+<input type="file" id="file-input" accept="image/png,image/jpeg,image/gif,image/webp,application/pdf" class="hidden">
+
+<!-- ===== Zone principale ===== -->
+<div class="main-area">
+  <div class="workspace empty" id="workspace">
+    <div id="canvas-container">
+      <canvas id="canvas"></canvas>
+      <div class="selection-overlay" id="selection-overlay"></div>
+    </div>
+  </div>
+  <div class="sidebar">
+    <div class="sidebar-header">
+      <span>Pions découpés</span>
+      <span class="count" id="pion-count">0</span>
+    </div>
+    <div class="pion-list" id="pion-list">
+      <div class="pion-list-empty" id="pion-list-empty">Aucun pion découpé</div>
+    </div>
+  </div>
+</div>
+
+<!-- ===== Modale ===== -->
+<div class="modal-overlay" id="modal-overlay">
+  <div class="modal">
+    <h3>Enregistrer le pion</h3>
+    <div class="preview-box" id="modal-preview"></div>
+    <div class="field">
+      <label for="input-pion-name">Nom du pion</label>
+      <input type="text" id="input-pion-name" placeholder="ex: Panzer IV">
+    </div>
+    <div class="field">
+      <label for="input-pion-file">Nom du fichier (sans extension)</label>
+      <input type="text" id="input-pion-file" placeholder="ex: panzer_iv">
+    </div>
+    <div class="buttons">
+      <button class="btn-cancel" id="modal-cancel">Annuler</button>
+      <button class="btn-ok" id="modal-ok">Enregistrer</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===== Barre d'état ===== -->
+<div class="statusbar">
+  <span id="status-left">Prêt</span>
+  <span id="status-right"></span>
+</div>
+
+<script>
+(function () {
+  // ==========================================
+  // État global
+  // ==========================================
+  let sourceImage = null;     // Image chargée
+  let zoom = 1;
+  let pions = [];             // Liste des pions découpés
+  let selecting = false;      // En train de sélectionner
+  let selStart = null;        // Point de départ sélection
+  let selEnd = null;          // Point de fin sélection
+  let selRect = null;         // Rectangle de sélection final {x, y, w, h}
+
+  const canvas = document.getElementById('canvas');
+  const ctx = canvas.getContext('2d');
+  const container = document.getElementById('canvas-container');
+  const workspace = document.getElementById('workspace');
+  const overlay = document.getElementById('selection-overlay');
+  const fileInput = document.getElementById('file-input');
+  const modalOverlay = document.getElementById('modal-overlay');
+  const pionList = document.getElementById('pion-list');
+  const pionListEmpty = document.getElementById('pion-list-empty');
+  const pionCount = document.getElementById('pion-count');
+
+  // ==========================================
+  // Menus
+  // ==========================================
+  const menubar = document.getElementById('menubar');
+  let openMenu = null;
+
+  menubar.addEventListener('click', (e) => {
+    const item = e.target.closest('.menu-item');
+    if (!item) return;
+    const entry = e.target.closest('.menu-entry');
+    if (entry && !entry.classList.contains('disabled')) {
+      handleAction(entry.dataset.action);
+      closeMenus();
+      return;
+    }
+    if (item.classList.contains('open')) {
+      closeMenus();
+    } else {
+      closeMenus();
+      item.classList.add('open');
+      openMenu = item;
+    }
+  });
+
+  menubar.addEventListener('mouseover', (e) => {
+    if (!openMenu) return;
+    const item = e.target.closest('.menu-item');
+    if (item && item !== openMenu) {
+      closeMenus();
+      item.classList.add('open');
+      openMenu = item;
+    }
+  });
+
+  document.addEventListener('click', (e) => {
+    if (!e.target.closest('.menubar')) closeMenus();
+  });
+
+  function closeMenus() {
+    document.querySelectorAll('.menu-item.open').forEach(el => el.classList.remove('open'));
+    openMenu = null;
+  }
+
+  // ==========================================
+  // Actions
+  // ==========================================
+  function handleAction(action) {
+    switch (action) {
+      case 'load': fileInput.click(); break;
+      case 'export-json': exportJSON(); break;
+      case 'export-images': exportImages(); break;
+      case 'zoom-in': setZoom(zoom * 1.25); break;
+      case 'zoom-out': setZoom(zoom / 1.25); break;
+      case 'zoom-fit': zoomFit(); break;
+      case 'undo': undoLastPion(); break;
+      case 'clear-all': clearAllPions(); break;
+      case 'about':
+        alert('Découpe de pions — Wargame\nOutil de découpe de planches de pions\nv1.0');
+        break;
+    }
+  }
+
+  // Toolbar buttons
+  document.getElementById('btn-load').addEventListener('click', () => fileInput.click());
+  document.getElementById('btn-zoom-in').addEventListener('click', () => setZoom(zoom * 1.25));
+  document.getElementById('btn-zoom-out').addEventListener('click', () => setZoom(zoom / 1.25));
+  document.getElementById('btn-zoom-fit').addEventListener('click', () => zoomFit());
+  document.getElementById('btn-export-json').addEventListener('click', () => exportJSON());
+  document.getElementById('btn-export-img').addEventListener('click', () => exportImages());
+
+  // Raccourcis clavier
+  document.addEventListener('keydown', (e) => {
+    if (modalOverlay.classList.contains('visible')) {
+      if (e.key === 'Escape') closeModal();
+      if (e.key === 'Enter') confirmModal();
+      return;
+    }
+    if (e.ctrlKey && e.key === 'o') { e.preventDefault(); fileInput.click(); }
+    if (e.ctrlKey && e.key === 's') { e.preventDefault(); exportJSON(); }
+    if (e.ctrlKey && e.key === '+') { e.preventDefault(); setZoom(zoom * 1.25); }
+    if (e.ctrlKey && e.key === '-') { e.preventDefault(); setZoom(zoom / 1.25); }
+    if (e.ctrlKey && e.key === '0') { e.preventDefault(); zoomFit(); }
+    if (e.ctrlKey && e.key === 'z') { e.preventDefault(); undoLastPion(); }
+    if (e.key === 'Escape') cancelSelection();
+  });
+
+  // ==========================================
+  // Chargement d'image
+  // ==========================================
+  fileInput.addEventListener('change', (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const img = new Image();
+      img.onload = () => {
+        sourceImage = img;
+        workspace.classList.remove('empty');
+        container.classList.add('loaded');
+        zoomFit();
+        drawCanvas();
+        setStatus('Planche chargée : ' + file.name + ' (' + img.naturalWidth + '×' + img.naturalHeight + ')');
+      };
+      img.src = ev.target.result;
+    };
+    reader.readAsDataURL(file);
+    fileInput.value = '';
+  });
+
+  // ==========================================
+  // Zoom
+  // ==========================================
+  function setZoom(z) {
+    zoom = Math.max(0.1, Math.min(5, z));
+    document.getElementById('zoom-label').textContent = Math.round(zoom * 100) + '%';
+    if (sourceImage) drawCanvas();
+  }
+
+  function zoomFit() {
+    if (!sourceImage) return;
+    const wRect = workspace.getBoundingClientRect();
+    const scaleX = (wRect.width - 40) / sourceImage.naturalWidth;
+    const scaleY = (wRect.height - 40) / sourceImage.naturalHeight;
+    setZoom(Math.min(scaleX, scaleY, 1));
+  }
+
+  // Zoom molette
+  workspace.addEventListener('wheel', (e) => {
+    if (!sourceImage) return;
+    e.preventDefault();
+    if (e.deltaY < 0) setZoom(zoom * 1.1);
+    else setZoom(zoom / 1.1);
+  }, { passive: false });
+
+  // ==========================================
+  // Dessin du canvas
+  // ==========================================
+  function drawCanvas() {
+    if (!sourceImage) return;
+
+    const w = Math.round(sourceImage.naturalWidth * zoom);
+    const h = Math.round(sourceImage.naturalHeight * zoom);
+    canvas.width = w;
+    canvas.height = h;
+    container.style.width = w + 'px';
+    container.style.height = h + 'px';
+
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(sourceImage, 0, 0, w, h);
+
+    // Dessiner les pions déjà découpés
+    pions.forEach(p => {
+      ctx.strokeStyle = '#a6e3a1';
+      ctx.lineWidth = 2;
+      ctx.setLineDash([4, 4]);
+      ctx.strokeRect(
+        p.x * zoom, p.y * zoom,
+        p.w * zoom, p.h * zoom
+      );
+      ctx.setLineDash([]);
+
+      // Label
+      ctx.fillStyle = 'rgba(166, 227, 161, 0.8)';
+      const labelH = 14;
+      const labelY = p.y * zoom - labelH - 2;
+      ctx.font = '11px Segoe UI, sans-serif';
+      const textW = ctx.measureText(p.name).width + 6;
+      ctx.fillRect(p.x * zoom, labelY, textW, labelH);
+      ctx.fillStyle = '#1e1e2e';
+      ctx.fillText(p.name, p.x * zoom + 3, labelY + 11);
+    });
+
+    updateStatus();
+  }
+
+  // ==========================================
+  // Sélection à la souris
+  // ==========================================
+  canvas.addEventListener('pointerdown', (e) => {
+    if (e.button === 2) return; // clic droit géré par contextmenu
+    if (e.button !== 0) return;
+    if (!sourceImage) return;
+
+    // Si une sélection existe déjà → ouvrir la modale
+    if (selRect) {
+      openModal();
+      return;
+    }
+
+    // Commencer une nouvelle sélection
+    selecting = true;
+    const rect = canvas.getBoundingClientRect();
+    selStart = {
+      x: (e.clientX - rect.left) / zoom,
+      y: (e.clientY - rect.top) / zoom
+    };
+    selEnd = { ...selStart };
+    overlay.classList.add('active');
+    canvas.setPointerCapture(e.pointerId);
+    e.preventDefault();
+  });
+
+  canvas.addEventListener('pointermove', (e) => {
+    if (!selecting) return;
+
+    const rect = canvas.getBoundingClientRect();
+    selEnd = {
+      x: Math.max(0, Math.min(sourceImage.naturalWidth, (e.clientX - rect.left) / zoom)),
+      y: Math.max(0, Math.min(sourceImage.naturalHeight, (e.clientY - rect.top) / zoom))
+    };
+    updateOverlay();
+  });
+
+  canvas.addEventListener('pointerup', (e) => {
+    if (!selecting) return;
+    selecting = false;
+
+    const rect = canvas.getBoundingClientRect();
+    selEnd = {
+      x: Math.max(0, Math.min(sourceImage.naturalWidth, (e.clientX - rect.left) / zoom)),
+      y: Math.max(0, Math.min(sourceImage.naturalHeight, (e.clientY - rect.top) / zoom))
+    };
+
+    // Calculer le rectangle
+    const x = Math.min(selStart.x, selEnd.x);
+    const y = Math.min(selStart.y, selEnd.y);
+    const w = Math.abs(selEnd.x - selStart.x);
+    const h = Math.abs(selEnd.y - selStart.y);
+
+    // Ignorer les sélections trop petites
+    if (w < 5 || h < 5) {
+      cancelSelection();
+      return;
+    }
+
+    selRect = { x: Math.round(x), y: Math.round(y), w: Math.round(w), h: Math.round(h) };
+    updateOverlay();
+    setStatus('Sélection : ' + selRect.w + '×' + selRect.h + 'px — Clic gauche pour enregistrer, clic droit pour annuler');
+  });
+
+  // Clic droit = annuler la sélection
+  canvas.addEventListener('contextmenu', (e) => {
+    e.preventDefault();
+    if (selRect || selecting) {
+      cancelSelection();
+      setStatus('Sélection annulée');
+    }
+  });
+
+  function updateOverlay() {
+    if (!selStart || !selEnd) return;
+    const x = Math.min(selStart.x, selEnd.x) * zoom;
+    const y = Math.min(selStart.y, selEnd.y) * zoom;
+    const w = Math.abs(selEnd.x - selStart.x) * zoom;
+    const h = Math.abs(selEnd.y - selStart.y) * zoom;
+
+    overlay.style.left = x + 'px';
+    overlay.style.top = y + 'px';
+    overlay.style.width = w + 'px';
+    overlay.style.height = h + 'px';
+  }
+
+  function cancelSelection() {
+    selecting = false;
+    selStart = null;
+    selEnd = null;
+    selRect = null;
+    overlay.classList.remove('active');
+  }
+
+  // ==========================================
+  // Modale de saisie
+  // ==========================================
+  function openModal() {
+    if (!selRect || !sourceImage) return;
+
+    // Générer l'aperçu
+    const previewCanvas = document.createElement('canvas');
+    previewCanvas.width = selRect.w;
+    previewCanvas.height = selRect.h;
+    const pctx = previewCanvas.getContext('2d');
+    pctx.drawImage(sourceImage, selRect.x, selRect.y, selRect.w, selRect.h, 0, 0, selRect.w, selRect.h);
+
+    const previewImg = document.createElement('img');
+    previewImg.src = previewCanvas.toDataURL('image/jpeg', 0.9);
+
+    const previewBox = document.getElementById('modal-preview');
+    previewBox.innerHTML = '';
+    previewBox.appendChild(previewImg);
+
+    // Suggérer un nom
+    const suggestedName = 'pion_' + (pions.length + 1);
+    document.getElementById('input-pion-name').value = '';
+    document.getElementById('input-pion-file').value = suggestedName;
+
+    modalOverlay.classList.add('visible');
+    setTimeout(() => document.getElementById('input-pion-name').focus(), 50);
+  }
+
+  function closeModal() {
+    modalOverlay.classList.remove('visible');
+  }
+
+  function confirmModal() {
+    const name = document.getElementById('input-pion-name').value.trim();
+    const file = document.getElementById('input-pion-file').value.trim();
+
+    if (!name) {
+      document.getElementById('input-pion-name').focus();
+      return;
+    }
+    if (!file) {
+      document.getElementById('input-pion-file').focus();
+      return;
+    }
+
+    // Extraire l'image du pion
+    const previewCanvas = document.createElement('canvas');
+    previewCanvas.width = selRect.w;
+    previewCanvas.height = selRect.h;
+    const pctx = previewCanvas.getContext('2d');
+    pctx.drawImage(sourceImage, selRect.x, selRect.y, selRect.w, selRect.h, 0, 0, selRect.w, selRect.h);
+
+    const dataUrl = previewCanvas.toDataURL('image/jpeg', 0.92);
+
+    // Enregistrer le pion
+    const pion = {
+      name,
+      file: file.replace(/\.jpg$/i, '') + '.jpg',
+      x: selRect.x,
+      y: selRect.y,
+      w: selRect.w,
+      h: selRect.h,
+      dataUrl
+    };
+
+    pions.push(pion);
+    addPionToList(pion, pions.length - 1);
+    updatePionCount();
+
+    closeModal();
+    cancelSelection();
+    drawCanvas();
+    setStatus('Pion "' + name + '" enregistré (' + selRect.w + '×' + selRect.h + 'px)');
+  }
+
+  document.getElementById('modal-ok').addEventListener('click', confirmModal);
+  document.getElementById('modal-cancel').addEventListener('click', () => {
+    closeModal();
+    // Garder la sélection pour permettre de réessayer
+  });
+
+  // ==========================================
+  // Liste des pions (sidebar)
+  // ==========================================
+  function addPionToList(pion, idx) {
+    pionListEmpty.style.display = 'none';
+
+    const entry = document.createElement('div');
+    entry.className = 'pion-entry';
+    entry.dataset.idx = idx;
+
+    const img = document.createElement('img');
+    img.src = pion.dataUrl;
+    img.alt = pion.name;
+    entry.appendChild(img);
+
+    const info = document.createElement('div');
+    info.className = 'pion-info';
+    info.innerHTML = `<div class="pion-name">${pion.name}</div><div class="pion-file">${pion.file}</div>`;
+    entry.appendChild(info);
+
+    const btn = document.createElement('button');
+    btn.className = 'pion-delete';
+    btn.textContent = '×';
+    btn.title = 'Supprimer';
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      deletePion(idx);
+    });
+    entry.appendChild(btn);
+
+    // Clic sur l'entrée = highlight sur le canvas
+    entry.addEventListener('click', () => {
+      highlightPion(pion);
+    });
+
+    pionList.appendChild(entry);
+  }
+
+  function refreshPionList() {
+    // Supprimer toutes les entrées sauf le placeholder
+    pionList.querySelectorAll('.pion-entry').forEach(el => el.remove());
+    pions.forEach((p, i) => addPionToList(p, i));
+    updatePionCount();
+  }
+
+  function updatePionCount() {
+    pionCount.textContent = pions.length;
+    pionListEmpty.style.display = pions.length === 0 ? 'block' : 'none';
+  }
+
+  function deletePion(idx) {
+    pions.splice(idx, 1);
+    refreshPionList();
+    drawCanvas();
+  }
+
+  function undoLastPion() {
+    if (pions.length === 0) return;
+    const removed = pions.pop();
+    refreshPionList();
+    drawCanvas();
+    setStatus('Pion "' + removed.name + '" supprimé');
+  }
+
+  function clearAllPions() {
+    if (pions.length === 0) return;
+    if (!confirm('Supprimer tous les pions découpés ?')) return;
+    pions = [];
+    refreshPionList();
+    drawCanvas();
+    setStatus('Tous les pions supprimés');
+  }
+
+  function highlightPion(pion) {
+    // Scroll et flash visuel sur le pion
+    drawCanvas();
+    ctx.strokeStyle = '#f9e2af';
+    ctx.lineWidth = 3;
+    ctx.setLineDash([]);
+    ctx.strokeRect(pion.x * zoom, pion.y * zoom, pion.w * zoom, pion.h * zoom);
+
+    // Reset après 1s
+    setTimeout(() => drawCanvas(), 1200);
+  }
+
+  // ==========================================
+  // Export JSON (ajout au fichier existant)
+  // ==========================================
+  let saveDirHandle = null;
+
+  async function exportJSON() {
+    if (pions.length === 0) {
+      alert('Aucun pion à exporter.');
+      return;
+    }
+
+    const newData = pions.map(p => ({
+      name: p.name,
+      file: p.file,
+      x: p.x,
+      y: p.y,
+      width: p.w,
+      height: p.h
+    }));
+
+    // Tenter la sauvegarde directe via File System Access API
+    if (window.showDirectoryPicker) {
+      try {
+        if (!saveDirHandle) {
+          saveDirHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
+        }
+
+        // Lire le fichier existant pour y ajouter les nouveaux pions
+        let existing = [];
+        try {
+          const existingHandle = await saveDirHandle.getFileHandle('pions.json');
+          const existingFile = await existingHandle.getFile();
+          const existingText = await existingFile.text();
+          existing = JSON.parse(existingText);
+          if (!Array.isArray(existing)) existing = [];
+        } catch (e) {
+          // Fichier n'existe pas encore → tableau vide
+          existing = [];
+        }
+
+        // Ajouter les nouveaux pions (éviter les doublons par nom de fichier)
+        const existingFiles = new Set(existing.map(p => p.file));
+        let added = 0;
+        for (const p of newData) {
+          if (!existingFiles.has(p.file)) {
+            existing.push(p);
+            existingFiles.add(p.file);
+            added++;
+          }
+        }
+
+        const json = JSON.stringify(existing, null, 2);
+        const fileHandle = await saveDirHandle.getFileHandle('pions.json', { create: true });
+        const writable = await fileHandle.createWritable();
+        await writable.write(json);
+        await writable.close();
+        setStatus('pions.json : ' + added + ' pion(s) ajouté(s), total ' + existing.length);
+        return;
+      } catch (err) {
+        if (err.name === 'AbortError') return;
+        console.warn('File System Access échoué, fallback download', err);
+      }
+    }
+
+    // Fallback : téléchargement classique
+    const json = JSON.stringify(newData, null, 2);
+    const blob = new Blob([json], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'pions.json';
+    a.click();
+    URL.revokeObjectURL(url);
+    setStatus('pions.json exporté (' + pions.length + ' pions)');
+  }
+
+  // ==========================================
+  // Export images JPG
+  // ==========================================
+  function exportImages() {
+    if (pions.length === 0) {
+      alert('Aucun pion à exporter.');
+      return;
+    }
+
+    pions.forEach(p => {
+      const c = document.createElement('canvas');
+      c.width = p.w;
+      c.height = p.h;
+      const cctx = c.getContext('2d');
+      cctx.drawImage(sourceImage, p.x, p.y, p.w, p.h, 0, 0, p.w, p.h);
+
+      c.toBlob((blob) => {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = p.file;
+        a.click();
+        URL.revokeObjectURL(url);
+      }, 'image/jpeg', 0.92);
+    });
+
+    setStatus(pions.length + ' images JPG exportées');
+  }
+
+  // ==========================================
+  // Barre d'état
+  // ==========================================
+  function setStatus(text) {
+    document.getElementById('status-left').textContent = text;
+  }
+
+  function updateStatus() {
+    if (!sourceImage) return;
+    document.getElementById('status-right').textContent =
+      'Image : ' + sourceImage.naturalWidth + '×' + sourceImage.naturalHeight +
+      ' — Zoom : ' + Math.round(zoom * 100) + '%';
+  }
+
+})();
+</script>
+</body>
+</html>
