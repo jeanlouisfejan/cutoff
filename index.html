@@ -1024,7 +1024,25 @@
         const writable = await fileHandle.createWritable();
         await writable.write(json);
         await writable.close();
-        setStatus('pions.json : ' + added + ' pion(s) ajouté(s), total ' + existing.length);
+
+        // Sauvegarder aussi les images JPG des pions dans le même dossier
+        let imgSaved = 0;
+        for (const p of pions) {
+          const c = document.createElement('canvas');
+          c.width = p.w;
+          c.height = p.h;
+          const cctx = c.getContext('2d');
+          cctx.drawImage(sourceImage, p.x, p.y, p.w, p.h, 0, 0, p.w, p.h);
+          const blob = await new Promise(resolve => c.toBlob(resolve, 'image/jpeg', 0.92));
+          const imgHandle = await saveDirHandle.getFileHandle(p.file, { create: true });
+          const imgWritable = await imgHandle.createWritable();
+          await imgWritable.write(blob);
+          await imgWritable.close();
+          imgSaved++;
+          setStatus('Export : pions.json + images ' + imgSaved + '/' + pions.length + '...');
+        }
+
+        setStatus('pions.json : ' + added + ' pion(s) ajouté(s), total ' + existing.length + ' — ' + imgSaved + ' image(s) sauvegardée(s)');
         return;
       } catch (err) {
         if (err.name === 'AbortError') return;
@@ -1047,12 +1065,45 @@
   // ==========================================
   // Export images JPG
   // ==========================================
-  function exportImages() {
+  async function exportImages() {
     if (pions.length === 0) {
       alert('Aucun pion à exporter.');
       return;
     }
 
+    // Sauvegarde directe via File System Access API
+    if (window.showDirectoryPicker) {
+      try {
+        if (!saveDirHandle) {
+          saveDirHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
+        }
+
+        let saved = 0;
+        for (const p of pions) {
+          const c = document.createElement('canvas');
+          c.width = p.w;
+          c.height = p.h;
+          const cctx = c.getContext('2d');
+          cctx.drawImage(sourceImage, p.x, p.y, p.w, p.h, 0, 0, p.w, p.h);
+
+          const blob = await new Promise(resolve => c.toBlob(resolve, 'image/jpeg', 0.92));
+          const fileHandle = await saveDirHandle.getFileHandle(p.file, { create: true });
+          const writable = await fileHandle.createWritable();
+          await writable.write(blob);
+          await writable.close();
+          saved++;
+          setStatus('Export JPG : ' + saved + '/' + pions.length + '...');
+        }
+
+        setStatus(saved + ' images JPG sauvegardées dans le dossier');
+        return;
+      } catch (err) {
+        if (err.name === 'AbortError') return;
+        console.warn('File System Access échoué, fallback download', err);
+      }
+    }
+
+    // Fallback : téléchargement classique
     pions.forEach(p => {
       const c = document.createElement('canvas');
       c.width = p.w;

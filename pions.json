@@ -1,0 +1,58 @@
+[
+  {
+    "name": "B17",
+    "file": "B17.jpg",
+    "x": 714,
+    "y": 570,
+    "width": 71,
+    "height": 75
+  },
+  {
+    "name": "B 24",
+    "file": "b_24.jpg",
+    "x": 710,
+    "y": 744,
+    "width": 77,
+    "height": 79
+  },
+  {
+    "name": "He 111",
+    "file": "he_111.jpg",
+    "x": 1046,
+    "y": 481,
+    "width": 77,
+    "height": 76
+  },
+  {
+    "name": "JU 88",
+    "file": "ju_88.jpg",
+    "x": 1350,
+    "y": 402,
+    "width": 77,
+    "height": 77
+  },
+  {
+    "name": "Judy",
+    "file": "001.jpg",
+    "x": 586,
+    "y": 610,
+    "width": 61,
+    "height": 62
+  },
+  {
+    "name": "Peggy",
+    "file": "002.jpg",
+    "x": 458,
+    "y": 797,
+    "width": 62,
+    "height": 63
+  },
+  {
+    "name": "Beaufighter",
+    "file": "003.jpg",
+    "x": 758,
+    "y": 610,
+    "width": 59,
+    "height": 61
+  }
+]
