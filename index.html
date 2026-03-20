@@ -132,16 +132,16 @@
       overflow: auto;
       background: #11111b;
       position: relative;
-      display: flex;
-      align-items: center;
-      justify-content: center;
     }
 
     .workspace.empty::after {
-      content: 'Charger une planche de pions via Fichier > Charger planche...';
+      content: 'Charger une planche (GIF, JPG, PNG, PDF) via Fichier > Charger planche...';
       color: #6c7086;
       font-size: 1rem;
       position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
       text-align: center;
       padding: 40px;
     }
@@ -337,11 +337,12 @@
     }
 
     .pion-entry img {
-      width: 40px;
-      height: 40px;
+      width: 56px;
+      height: 56px;
       object-fit: contain;
-      border-radius: 2px;
+      border-radius: 10px;
       background: #313244;
+      flex-shrink: 0;
     }
 
     .pion-entry .pion-info {
@@ -396,6 +397,54 @@
 
     /* ===== File inputs cachés ===== */
     .hidden { display: none; }
+
+    /* ===== Contrôle pages PDF ===== */
+    .pdf-pages {
+      display: flex;
+      gap: 5px;
+      align-items: center;
+    }
+
+    .pdf-pages.hidden-ctrl { display: none; }
+
+    .pdf-pages span {
+      font-size: 0.8rem;
+      color: #a6adc8;
+      min-width: 70px;
+      text-align: center;
+    }
+
+    /* ===== Indicateur de chargement ===== */
+    .loading-overlay {
+      display: none;
+      position: absolute;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(17, 17, 27, 0.85);
+      z-index: 50;
+      align-items: center;
+      justify-content: center;
+      flex-direction: column;
+      gap: 12px;
+      color: #cdd6f4;
+      font-size: 0.9rem;
+    }
+
+    .loading-overlay.active {
+      display: flex;
+    }
+
+    .loading-spinner {
+      width: 36px;
+      height: 36px;
+      border: 3px solid #45475a;
+      border-top-color: #89b4fa;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
   </style>
 </head>
 <body>
@@ -427,6 +476,8 @@
       <div class="menu-entry" data-action="zoom-out">Zoom -<span class="shortcut">Ctrl+-</span></div>
       <div class="menu-entry" data-action="zoom-fit">Ajuster à la fenêtre<span class="shortcut">Ctrl+0</span></div>
       <div class="menu-separator"></div>
+      <div class="menu-entry" data-action="rotate">Tourner 90° (sens horaire)<span class="shortcut">R</span></div>
+      <div class="menu-separator"></div>
       <div class="menu-entry" data-action="toggle-grid">Afficher grille de découpe</div>
     </div>
   </div>
@@ -452,6 +503,16 @@
   </div>
   <div class="toolbar-sep"></div>
   <div class="toolbar-group">
+    <button id="btn-rotate" title="Tourner la planche de 90° (sens horaire) [R]">↻ 90°</button>
+  </div>
+  <div class="toolbar-sep"></div>
+  <div class="toolbar-group pdf-pages hidden-ctrl" id="pdf-pages">
+    <button id="btn-page-prev" title="Page précédente">&lt;</button>
+    <span id="page-label">1 / 1</span>
+    <button id="btn-page-next" title="Page suivante">&gt;</button>
+  </div>
+  <div class="toolbar-sep"></div>
+  <div class="toolbar-group">
     <button id="btn-export-json" title="Exporter en JSON">Exporter JSON</button>
     <button id="btn-export-img" title="Exporter les images JPG">Exporter JPG</button>
   </div>
@@ -463,6 +524,10 @@
 <!-- ===== Zone principale ===== -->
 <div class="main-area">
   <div class="workspace empty" id="workspace">
+    <div class="loading-overlay" id="loading-overlay">
+      <div class="loading-spinner"></div>
+      <span>Chargement en cours...</span>
+    </div>
     <div id="canvas-container">
       <canvas id="canvas"></canvas>
       <div class="selection-overlay" id="selection-overlay"></div>
@@ -505,18 +570,39 @@
   <span id="status-right"></span>
 </div>
 
-<script>
+<script type="module">
+// Charger PDF.js dynamiquement
+let pdfjsLib = null;
+try {
+  pdfjsLib = await import('https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.9.155/pdf.min.mjs');
+  pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.9.155/pdf.worker.min.mjs';
+} catch (e) {
+  console.warn('PDF.js non disponible, le support PDF sera désactivé.', e);
+}
+
 (function () {
   // ==========================================
   // État global
   // ==========================================
   let sourceImage = null;     // Image chargée
   let zoom = 1;
+  let boardRotation = 0;      // Rotation de la planche : 0, 90, 180, 270
   let pions = [];             // Liste des pions découpés
   let selecting = false;      // En train de sélectionner
-  let selStart = null;        // Point de départ sélection
-  let selEnd = null;          // Point de fin sélection
-  let selRect = null;         // Rectangle de sélection final {x, y, w, h}
+  let selStart = null;        // Point de départ sélection (coords canvas px)
+  let selEnd = null;          // Point de fin sélection (coords canvas px)
+  let selRect = null;         // Rectangle de sélection final {x, y, w, h} en coords image
+
+  // Pan state
+  let isPanning = false;
+  let panStartX = 0, panStartY = 0;
+  let panScrollX = 0, panScrollY = 0;
+  let isSpaceDown = false;
+
+  // PDF state
+  let pdfDoc = null;          // Document PDF chargé
+  let pdfCurrentPage = 1;     // Page courante
+  let pdfTotalPages = 0;      // Nombre total de pages
 
   const canvas = document.getElementById('canvas');
   const ctx = canvas.getContext('2d');
@@ -528,6 +614,9 @@
   const pionList = document.getElementById('pion-list');
   const pionListEmpty = document.getElementById('pion-list-empty');
   const pionCount = document.getElementById('pion-count');
+  const loadingOverlay = document.getElementById('loading-overlay');
+  const pdfPagesCtrl = document.getElementById('pdf-pages');
+  const pageLabel = document.getElementById('page-label');
 
   // ==========================================
   // Menus
@@ -583,6 +672,7 @@
       case 'zoom-in': setZoom(zoom * 1.25); break;
       case 'zoom-out': setZoom(zoom / 1.25); break;
       case 'zoom-fit': zoomFit(); break;
+      case 'rotate': rotateboard(); break;
       case 'undo': undoLastPion(); break;
       case 'clear-all': clearAllPions(); break;
       case 'about':
@@ -596,6 +686,7 @@
   document.getElementById('btn-zoom-in').addEventListener('click', () => setZoom(zoom * 1.25));
   document.getElementById('btn-zoom-out').addEventListener('click', () => setZoom(zoom / 1.25));
   document.getElementById('btn-zoom-fit').addEventListener('click', () => zoomFit());
+  document.getElementById('btn-rotate').addEventListener('click', () => rotateboard());
   document.getElementById('btn-export-json').addEventListener('click', () => exportJSON());
   document.getElementById('btn-export-img').addEventListener('click', () => exportImages());
 
@@ -612,32 +703,192 @@
     if (e.ctrlKey && e.key === '-') { e.preventDefault(); setZoom(zoom / 1.25); }
     if (e.ctrlKey && e.key === '0') { e.preventDefault(); zoomFit(); }
     if (e.ctrlKey && e.key === 'z') { e.preventDefault(); undoLastPion(); }
+    if (e.key === 'r' || e.key === 'R') { if (!e.ctrlKey && !e.altKey && sourceImage) { e.preventDefault(); rotateboard(); } }
     if (e.key === 'Escape') cancelSelection();
+    if (e.key === 'PageUp' && pdfDoc) { e.preventDefault(); if (pdfCurrentPage > 1) renderPdfPage(pdfCurrentPage - 1); }
+    if (e.key === 'PageDown' && pdfDoc) { e.preventDefault(); if (pdfCurrentPage < pdfTotalPages) renderPdfPage(pdfCurrentPage + 1); }
+    if (e.key === ' ' && !e.ctrlKey && !e.altKey && sourceImage) {
+      if (!isSpaceDown) { isSpaceDown = true; canvas.style.cursor = 'grab'; }
+      e.preventDefault();
+    }
+  });
+
+  document.addEventListener('keyup', (e) => {
+    if (e.key === ' ') {
+      isSpaceDown = false;
+      if (!isPanning) canvas.style.cursor = 'crosshair';
+    }
   });
 
   // ==========================================
-  // Chargement d'image
+  // Chargement d'image / PDF
   // ==========================================
-  fileInput.addEventListener('change', (e) => {
+  function showLoading(show) {
+    if (show) loadingOverlay.classList.add('active');
+    else loadingOverlay.classList.remove('active');
+  }
+
+  function showPdfControls(show) {
+    if (show) pdfPagesCtrl.classList.remove('hidden-ctrl');
+    else pdfPagesCtrl.classList.add('hidden-ctrl');
+  }
+
+  function updatePageLabel() {
+    pageLabel.textContent = pdfCurrentPage + ' / ' + pdfTotalPages;
+  }
+
+  async function renderPdfPage(pageNum) {
+    if (!pdfDoc) return;
+    showLoading(true);
+    setStatus('Rendu de la page ' + pageNum + '/' + pdfTotalPages + '...');
+
+    const page = await pdfDoc.getPage(pageNum);
+    // Rendu à 2x pour bonne qualité
+    const scale = 2;
+    const viewport = page.getViewport({ scale });
+
+    const offCanvas = document.createElement('canvas');
+    offCanvas.width = viewport.width;
+    offCanvas.height = viewport.height;
+    const offCtx = offCanvas.getContext('2d');
+
+    await page.render({ canvasContext: offCtx, viewport }).promise;
+
+    // Convertir en Image pour rester compatible avec le reste du code
+    const img = new Image();
+    img.onload = () => {
+      sourceImage = img;
+      workspace.classList.remove('empty');
+      container.classList.add('loaded');
+      pdfCurrentPage = pageNum;
+      updatePageLabel();
+      zoomFit();
+      drawCanvas();
+      showLoading(false);
+      setStatus('PDF page ' + pageNum + '/' + pdfTotalPages + ' — ' + img.naturalWidth + '×' + img.naturalHeight + 'px');
+    };
+    img.src = offCanvas.toDataURL('image/png');
+  }
+
+  // Navigation PDF
+  document.getElementById('btn-page-prev').addEventListener('click', () => {
+    if (!pdfDoc || pdfCurrentPage <= 1) return;
+    renderPdfPage(pdfCurrentPage - 1);
+  });
+
+  document.getElementById('btn-page-next').addEventListener('click', () => {
+    if (!pdfDoc || pdfCurrentPage >= pdfTotalPages) return;
+    renderPdfPage(pdfCurrentPage + 1);
+  });
+
+  fileInput.addEventListener('change', async (e) => {
     const file = e.target.files[0];
     if (!file) return;
 
-    const reader = new FileReader();
-    reader.onload = (ev) => {
-      const img = new Image();
-      img.onload = () => {
-        sourceImage = img;
-        workspace.classList.remove('empty');
-        container.classList.add('loaded');
-        zoomFit();
-        drawCanvas();
-        setStatus('Planche chargée : ' + file.name + ' (' + img.naturalWidth + '×' + img.naturalHeight + ')');
+    const isPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
+
+    if (isPdf) {
+      if (!pdfjsLib) {
+        alert('Le support PDF n\'est pas disponible. Vérifiez votre connexion internet.');
+        return;
+      }
+      // Chargement PDF via PDF.js
+      showLoading(true);
+      showPdfControls(true);
+      setStatus('Chargement du PDF...');
+
+      const arrayBuffer = await file.arrayBuffer();
+      boardRotation = 0;
+      try {
+        pdfDoc = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+        pdfTotalPages = pdfDoc.numPages;
+        pdfCurrentPage = 1;
+        updatePageLabel();
+        await renderPdfPage(1);
+        setStatus('PDF chargé : ' + file.name + ' — ' + pdfTotalPages + ' page(s)');
+      } catch (err) {
+        showLoading(false);
+        setStatus('Erreur de chargement PDF : ' + err.message);
+        console.error('Erreur PDF :', err);
+      }
+    } else {
+      // Chargement image classique (GIF, JPG, PNG, WebP)
+      pdfDoc = null;
+      boardRotation = 0;
+      showPdfControls(false);
+      showLoading(true);
+      setStatus('Chargement de l\'image...');
+
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        const img = new Image();
+        img.onload = () => {
+          sourceImage = img;
+          workspace.classList.remove('empty');
+          container.classList.add('loaded');
+          zoomFit();
+          drawCanvas();
+          showLoading(false);
+          setStatus('Planche chargée : ' + file.name + ' (' + img.naturalWidth + '×' + img.naturalHeight + ')');
+        };
+        img.onerror = () => {
+          showLoading(false);
+          setStatus('Erreur : format d\'image non supporté');
+        };
+        img.src = ev.target.result;
       };
-      img.src = ev.target.result;
-    };
-    reader.readAsDataURL(file);
+      reader.readAsDataURL(file);
+    }
     fileInput.value = '';
   });
+
+  // ==========================================
+  // Rotation de la planche
+  // ==========================================
+  function rotateboard() {
+    if (!sourceImage) return;
+    boardRotation = (boardRotation + 90) % 360;
+    cancelSelection();
+    zoomFit();
+    drawCanvas();
+    setStatus('Planche tournée à ' + boardRotation + '°');
+  }
+
+  // Dimensions affichées selon rotation (en pixels image)
+  function displaySize() {
+    if (!sourceImage) return { w: 0, h: 0 };
+    if (boardRotation === 90 || boardRotation === 270)
+      return { w: sourceImage.naturalHeight, h: sourceImage.naturalWidth };
+    return { w: sourceImage.naturalWidth, h: sourceImage.naturalHeight };
+  }
+
+  // Convertit un point canvas (px) en coordonnées image originale
+  function canvasToImage(cx, cy) {
+    const imgW = sourceImage.naturalWidth;
+    const imgH = sourceImage.naturalHeight;
+    switch (boardRotation) {
+      case 0:   return { x: cx / zoom, y: cy / zoom };
+      case 90:  return { x: cy / zoom, y: imgH - cx / zoom };
+      case 180: return { x: imgW - cx / zoom, y: imgH - cy / zoom };
+      case 270: return { x: imgW - cy / zoom, y: cx / zoom };
+    }
+  }
+
+  // Convertit un rectangle image (ix, iy, iw, ih) en rectangle canvas (px)
+  function imageRectToCanvas(ix, iy, iw, ih) {
+    const imgW = sourceImage.naturalWidth;
+    const imgH = sourceImage.naturalHeight;
+    switch (boardRotation) {
+      case 0:
+        return { x: ix * zoom, y: iy * zoom, w: iw * zoom, h: ih * zoom };
+      case 90:
+        return { x: (imgH - iy - ih) * zoom, y: ix * zoom, w: ih * zoom, h: iw * zoom };
+      case 180:
+        return { x: (imgW - ix - iw) * zoom, y: (imgH - iy - ih) * zoom, w: iw * zoom, h: ih * zoom };
+      case 270:
+        return { x: iy * zoom, y: (imgW - ix - iw) * zoom, w: ih * zoom, h: iw * zoom };
+    }
+  }
 
   // ==========================================
   // Zoom
@@ -650,19 +901,75 @@
 
   function zoomFit() {
     if (!sourceImage) return;
+    const ds = displaySize();
     const wRect = workspace.getBoundingClientRect();
-    const scaleX = (wRect.width - 40) / sourceImage.naturalWidth;
-    const scaleY = (wRect.height - 40) / sourceImage.naturalHeight;
+    const scaleX = (wRect.width - 40) / ds.w;
+    const scaleY = (wRect.height - 40) / ds.h;
     setZoom(Math.min(scaleX, scaleY, 1));
   }
 
-  // Zoom molette
+  // Zoom molette (centré sur le curseur)
   workspace.addEventListener('wheel', (e) => {
     if (!sourceImage) return;
     e.preventDefault();
+    const wRect = workspace.getBoundingClientRect();
+    const mx = Math.max(0, Math.floor((workspace.clientWidth  - canvas.width)  / 2));
+    const my = Math.max(0, Math.floor((workspace.clientHeight - canvas.height) / 2));
+    const cursorIx = (e.clientX - wRect.left + workspace.scrollLeft - mx) / zoom;
+    const cursorIy = (e.clientY - wRect.top  + workspace.scrollTop  - my) / zoom;
     if (e.deltaY < 0) setZoom(zoom * 1.1);
     else setZoom(zoom / 1.1);
+    const newMx = Math.max(0, Math.floor((workspace.clientWidth  - canvas.width)  / 2));
+    const newMy = Math.max(0, Math.floor((workspace.clientHeight - canvas.height) / 2));
+    workspace.scrollLeft = newMx + cursorIx * zoom - (e.clientX - wRect.left);
+    workspace.scrollTop  = newMy + cursorIy * zoom - (e.clientY - wRect.top);
   }, { passive: false });
+
+  // ==========================================
+  // Panoramique souris (clic molette ou Espace+glisser)
+  // ==========================================
+  workspace.addEventListener('pointerdown', (e) => {
+    if (!sourceImage) return;
+    if (e.button !== 1 && !(e.button === 0 && isSpaceDown)) return;
+    isPanning = true;
+    panStartX = e.clientX;
+    panStartY = e.clientY;
+    panScrollX = workspace.scrollLeft;
+    panScrollY = workspace.scrollTop;
+    workspace.setPointerCapture(e.pointerId);
+    workspace.style.cursor = 'grabbing';
+    canvas.style.cursor = 'grabbing';
+    e.preventDefault();
+  });
+
+  workspace.addEventListener('pointermove', (e) => {
+    if (!isPanning) return;
+    workspace.scrollLeft = panScrollX - (e.clientX - panStartX);
+    workspace.scrollTop = panScrollY - (e.clientY - panStartY);
+  });
+
+  workspace.addEventListener('pointerup', () => {
+    if (!isPanning) return;
+    isPanning = false;
+    workspace.style.cursor = '';
+    canvas.style.cursor = isSpaceDown ? 'grab' : 'crosshair';
+  });
+
+  workspace.addEventListener('pointercancel', () => {
+    if (!isPanning) return;
+    isPanning = false;
+    workspace.style.cursor = '';
+    canvas.style.cursor = 'crosshair';
+  });
+
+  // ==========================================
+  // Centrage du container dans le workspace
+  // ==========================================
+  function updateContainerMargin() {
+    const mx = Math.max(0, Math.floor((workspace.clientWidth  - canvas.width)  / 2));
+    const my = Math.max(0, Math.floor((workspace.clientHeight - canvas.height) / 2));
+    container.style.margin = my + 'px ' + mx + 'px';
+  }
 
   // ==========================================
   // Dessin du canvas
@@ -670,8 +977,11 @@
   function drawCanvas() {
     if (!sourceImage) return;
 
-    const w = Math.round(sourceImage.naturalWidth * zoom);
-    const h = Math.round(sourceImage.naturalHeight * zoom);
+    const imgW = sourceImage.naturalWidth;
+    const imgH = sourceImage.naturalHeight;
+    const ds = displaySize();
+    const w = Math.round(ds.w * zoom);
+    const h = Math.round(ds.h * zoom);
     canvas.width = w;
     canvas.height = h;
     container.style.width = w + 'px';
@@ -679,30 +989,47 @@
 
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = 'high';
-    ctx.drawImage(sourceImage, 0, 0, w, h);
+
+    // Dessiner l'image avec rotation
+    ctx.save();
+    switch (boardRotation) {
+      case 90:
+        ctx.translate(w, 0);
+        ctx.rotate(Math.PI / 2);
+        break;
+      case 180:
+        ctx.translate(w, h);
+        ctx.rotate(Math.PI);
+        break;
+      case 270:
+        ctx.translate(0, h);
+        ctx.rotate(-Math.PI / 2);
+        break;
+    }
+    ctx.drawImage(sourceImage, 0, 0, imgW * zoom, imgH * zoom);
+    ctx.restore();
 
     // Dessiner les pions déjà découpés
     pions.forEach(p => {
+      const cr = imageRectToCanvas(p.x, p.y, p.w, p.h);
       ctx.strokeStyle = '#a6e3a1';
       ctx.lineWidth = 2;
       ctx.setLineDash([4, 4]);
-      ctx.strokeRect(
-        p.x * zoom, p.y * zoom,
-        p.w * zoom, p.h * zoom
-      );
+      ctx.strokeRect(cr.x, cr.y, cr.w, cr.h);
       ctx.setLineDash([]);
 
       // Label
       ctx.fillStyle = 'rgba(166, 227, 161, 0.8)';
       const labelH = 14;
-      const labelY = p.y * zoom - labelH - 2;
+      const labelY = cr.y - labelH - 2;
       ctx.font = '11px Segoe UI, sans-serif';
       const textW = ctx.measureText(p.name).width + 6;
-      ctx.fillRect(p.x * zoom, labelY, textW, labelH);
+      ctx.fillRect(cr.x, labelY, textW, labelH);
       ctx.fillStyle = '#1e1e2e';
-      ctx.fillText(p.name, p.x * zoom + 3, labelY + 11);
+      ctx.fillText(p.name, cr.x + 3, labelY + 11);
     });
 
+    updateContainerMargin();
     updateStatus();
   }
 
@@ -713,6 +1040,7 @@
     if (e.button === 2) return; // clic droit géré par contextmenu
     if (e.button !== 0) return;
     if (!sourceImage) return;
+    if (isSpaceDown || isPanning) return; // mode panoramique
 
     // Si une sélection existe déjà → ouvrir la modale
     if (selRect) {
@@ -724,8 +1052,8 @@
     selecting = true;
     const rect = canvas.getBoundingClientRect();
     selStart = {
-      x: (e.clientX - rect.left) / zoom,
-      y: (e.clientY - rect.top) / zoom
+      x: e.clientX - rect.left,
+      y: e.clientY - rect.top
     };
     selEnd = { ...selStart };
     overlay.classList.add('active');
@@ -738,8 +1066,8 @@
 
     const rect = canvas.getBoundingClientRect();
     selEnd = {
-      x: Math.max(0, Math.min(sourceImage.naturalWidth, (e.clientX - rect.left) / zoom)),
-      y: Math.max(0, Math.min(sourceImage.naturalHeight, (e.clientY - rect.top) / zoom))
+      x: Math.max(0, Math.min(canvas.width, e.clientX - rect.left)),
+      y: Math.max(0, Math.min(canvas.height, e.clientY - rect.top))
     };
     updateOverlay();
   });
@@ -750,23 +1078,31 @@
 
     const rect = canvas.getBoundingClientRect();
     selEnd = {
-      x: Math.max(0, Math.min(sourceImage.naturalWidth, (e.clientX - rect.left) / zoom)),
-      y: Math.max(0, Math.min(sourceImage.naturalHeight, (e.clientY - rect.top) / zoom))
+      x: Math.max(0, Math.min(canvas.width, e.clientX - rect.left)),
+      y: Math.max(0, Math.min(canvas.height, e.clientY - rect.top))
     };
 
-    // Calculer le rectangle
-    const x = Math.min(selStart.x, selEnd.x);
-    const y = Math.min(selStart.y, selEnd.y);
-    const w = Math.abs(selEnd.x - selStart.x);
-    const h = Math.abs(selEnd.y - selStart.y);
-
-    // Ignorer les sélections trop petites
-    if (w < 5 || h < 5) {
+    // Ignorer les sélections trop petites (en canvas px)
+    const cw = Math.abs(selEnd.x - selStart.x);
+    const ch = Math.abs(selEnd.y - selStart.y);
+    if (cw < 5 || ch < 5) {
       cancelSelection();
       return;
     }
 
-    selRect = { x: Math.round(x), y: Math.round(y), w: Math.round(w), h: Math.round(h) };
+    // Convertir les coins canvas en coordonnées image
+    const cx1 = Math.min(selStart.x, selEnd.x);
+    const cy1 = Math.min(selStart.y, selEnd.y);
+    const cx2 = Math.max(selStart.x, selEnd.x);
+    const cy2 = Math.max(selStart.y, selEnd.y);
+    const imgTL = canvasToImage(cx1, cy1);
+    const imgBR = canvasToImage(cx2, cy2);
+    const ix = Math.round(Math.min(imgTL.x, imgBR.x));
+    const iy = Math.round(Math.min(imgTL.y, imgBR.y));
+    const iw = Math.round(Math.abs(imgBR.x - imgTL.x));
+    const ih = Math.round(Math.abs(imgBR.y - imgTL.y));
+
+    selRect = { x: ix, y: iy, w: iw, h: ih };
     updateOverlay();
     setStatus('Sélection : ' + selRect.w + '×' + selRect.h + 'px — Clic gauche pour enregistrer, clic droit pour annuler');
   });
@@ -782,10 +1118,10 @@
 
   function updateOverlay() {
     if (!selStart || !selEnd) return;
-    const x = Math.min(selStart.x, selEnd.x) * zoom;
-    const y = Math.min(selStart.y, selEnd.y) * zoom;
-    const w = Math.abs(selEnd.x - selStart.x) * zoom;
-    const h = Math.abs(selEnd.y - selStart.y) * zoom;
+    const x = Math.min(selStart.x, selEnd.x);
+    const y = Math.min(selStart.y, selEnd.y);
+    const w = Math.abs(selEnd.x - selStart.x);
+    const h = Math.abs(selEnd.y - selStart.y);
 
     overlay.style.left = x + 'px';
     overlay.style.top = y + 'px';
@@ -802,18 +1138,47 @@
   }
 
   // ==========================================
+  // Extraction d'un pion (avec rotation appliquée)
+  // ==========================================
+  function extractPionCanvas(r, rot) {
+    const iw = r.w, ih = r.h;
+    const cw = (rot === 90 || rot === 270) ? ih : iw;
+    const ch = (rot === 90 || rot === 270) ? iw : ih;
+    const c = document.createElement('canvas');
+    c.width = cw;
+    c.height = ch;
+    const cctx = c.getContext('2d');
+    switch (rot) {
+      case 0:
+        cctx.drawImage(sourceImage, r.x, r.y, iw, ih, 0, 0, iw, ih);
+        break;
+      case 90:
+        cctx.translate(cw, 0);
+        cctx.rotate(Math.PI / 2);
+        cctx.drawImage(sourceImage, r.x, r.y, iw, ih, 0, 0, iw, ih);
+        break;
+      case 180:
+        cctx.translate(cw, ch);
+        cctx.rotate(Math.PI);
+        cctx.drawImage(sourceImage, r.x, r.y, iw, ih, 0, 0, iw, ih);
+        break;
+      case 270:
+        cctx.translate(0, ch);
+        cctx.rotate(-Math.PI / 2);
+        cctx.drawImage(sourceImage, r.x, r.y, iw, ih, 0, 0, iw, ih);
+        break;
+    }
+    return c;
+  }
+
+  // ==========================================
   // Modale de saisie
   // ==========================================
   function openModal() {
     if (!selRect || !sourceImage) return;
 
-    // Générer l'aperçu
-    const previewCanvas = document.createElement('canvas');
-    previewCanvas.width = selRect.w;
-    previewCanvas.height = selRect.h;
-    const pctx = previewCanvas.getContext('2d');
-    pctx.drawImage(sourceImage, selRect.x, selRect.y, selRect.w, selRect.h, 0, 0, selRect.w, selRect.h);
-
+    // Générer l'aperçu (avec rotation de la planche)
+    const previewCanvas = extractPionCanvas(selRect, boardRotation);
     const previewImg = document.createElement('img');
     previewImg.src = previewCanvas.toDataURL('image/jpeg', 0.9);
 
@@ -847,14 +1212,9 @@
       return;
     }
 
-    // Extraire l'image du pion
-    const previewCanvas = document.createElement('canvas');
-    previewCanvas.width = selRect.w;
-    previewCanvas.height = selRect.h;
-    const pctx = previewCanvas.getContext('2d');
-    pctx.drawImage(sourceImage, selRect.x, selRect.y, selRect.w, selRect.h, 0, 0, selRect.w, selRect.h);
-
-    const dataUrl = previewCanvas.toDataURL('image/jpeg', 0.92);
+    // Extraire l'image du pion (avec rotation de la planche)
+    const pionCanvas = extractPionCanvas(selRect, boardRotation);
+    const dataUrl = pionCanvas.toDataURL('image/jpeg', 0.92);
 
     // Enregistrer le pion
     const pion = {
@@ -864,6 +1224,7 @@
       y: selRect.y,
       w: selRect.w,
       h: selRect.h,
+      rotation: boardRotation,
       dataUrl
     };
 
@@ -959,10 +1320,11 @@
   function highlightPion(pion) {
     // Scroll et flash visuel sur le pion
     drawCanvas();
+    const cr = imageRectToCanvas(pion.x, pion.y, pion.w, pion.h);
     ctx.strokeStyle = '#f9e2af';
     ctx.lineWidth = 3;
     ctx.setLineDash([]);
-    ctx.strokeRect(pion.x * zoom, pion.y * zoom, pion.w * zoom, pion.h * zoom);
+    ctx.strokeRect(cr.x, cr.y, cr.w, cr.h);
 
     // Reset après 1s
     setTimeout(() => drawCanvas(), 1200);
@@ -1028,11 +1390,7 @@
         // Sauvegarder aussi les images JPG des pions dans le même dossier
         let imgSaved = 0;
         for (const p of pions) {
-          const c = document.createElement('canvas');
-          c.width = p.w;
-          c.height = p.h;
-          const cctx = c.getContext('2d');
-          cctx.drawImage(sourceImage, p.x, p.y, p.w, p.h, 0, 0, p.w, p.h);
+          const c = extractPionCanvas(p, p.rotation || 0);
           const blob = await new Promise(resolve => c.toBlob(resolve, 'image/jpeg', 0.92));
           const imgHandle = await saveDirHandle.getFileHandle(p.file, { create: true });
           const imgWritable = await imgHandle.createWritable();
@@ -1080,12 +1438,7 @@
 
         let saved = 0;
         for (const p of pions) {
-          const c = document.createElement('canvas');
-          c.width = p.w;
-          c.height = p.h;
-          const cctx = c.getContext('2d');
-          cctx.drawImage(sourceImage, p.x, p.y, p.w, p.h, 0, 0, p.w, p.h);
-
+          const c = extractPionCanvas(p, p.rotation || 0);
           const blob = await new Promise(resolve => c.toBlob(resolve, 'image/jpeg', 0.92));
           const fileHandle = await saveDirHandle.getFileHandle(p.file, { create: true });
           const writable = await fileHandle.createWritable();
@@ -1105,11 +1458,7 @@
 
     // Fallback : téléchargement classique
     pions.forEach(p => {
-      const c = document.createElement('canvas');
-      c.width = p.w;
-      c.height = p.h;
-      const cctx = c.getContext('2d');
-      cctx.drawImage(sourceImage, p.x, p.y, p.w, p.h, 0, 0, p.w, p.h);
+      const c = extractPionCanvas(p, p.rotation || 0);
 
       c.toBlob((blob) => {
         const url = URL.createObjectURL(blob);
@@ -1139,6 +1488,10 @@
   }
 
 })();
+</script>
+<!-- Fallback si PDF.js ne charge pas en module -->
+<script nomodule>
+  console.warn('Ce navigateur ne supporte pas les modules ES. Le support PDF ne sera pas disponible.');
 </script>
 </body>
 </html>
